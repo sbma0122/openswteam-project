@@ -1,9 +1,11 @@
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
 def process_image(image_path):
     # 1. 이미지 로드
     image = cv2.imread(image_path)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Matplotlib은 RGB 포맷 사용
 
     # 2. 이미지 전처리 (그레이스케일, 임계값 처리 등)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -27,5 +29,12 @@ def process_image(image_path):
         height_cm = h * scale
         measurements.append((width_cm, height_cm))
         cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    # 6. Matplotlib으로 결과 시각화
+    plt.figure(figsize=(10, 6))
+    plt.imshow(image_rgb)
+    plt.title("Object Size Measurement")
+    plt.axis("off")
+    plt.show()
 
     return image, measurements
