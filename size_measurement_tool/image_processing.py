@@ -20,10 +20,35 @@ def process_image(image_path):
 
     scale = actual_width / ref_width  # 스케일 계산
 
-    # 4. 전체 이미지에서 객체 탐지
+    #update commit here!!
+    # 4. 다중 스케일 객체 탐지
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    measurements = []
+    
+    # 이미지 피라미드 생성
+    scales = [1.0, 0.75, 0.5]
+    for scale_factor in scales:
+        resized = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor)
+        
+        _, thresh = cv2.threshold(resized, 100, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # 원본 이미지 크기로 좌표 변환
+            x, y = int(x / scale_factor), int(y / scale_factor)
+            w, h = int(w / scale_factor), int(h / scale_factor)
+            
+            width_cm = w * scale
+            height_cm = h * scale
+            
+            # 너무 작은 객체 무시
+            if width_cm > 1 and height_cm > 1:
+                measurements.append((width_cm, height_cm))
+                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    #finish my commit!!
 
     # 5. 객체 크기 측정 및 시각화
     measurements = []
