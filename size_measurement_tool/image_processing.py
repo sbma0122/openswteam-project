@@ -66,4 +66,5 @@ def process_image(image_path):
     plt.axis("off")
     plt.show()
 
+    
     return image, measurements
