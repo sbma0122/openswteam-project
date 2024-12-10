@@ -1,70 +1,134 @@
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
+from ultralytics import YOLO
 
-def process_image(image_path):
-    # 1. 이미지 로드
-    image = cv2.imread(image_path)
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Matplotlib 호환 RGB 포맷
+def process_image(image_path, confidence_threshold=0.7, nms_threshold=0.4):
+    # 이미지 로드
+    original_image = cv2.imread(image_path)
+    if original_image is None:
+        raise Exception("이미지를 불러올 수 없습니다.")
 
-    # 2. 사용자 기준 물체 선택
-    print("기준 물체를 선택하세요: 마우스로 드래그한 후 Enter 또는 Spacebar를 누르세요.")
-    roi = cv2.selectROI("Select Reference Object", image, fromCenter=False, showCrosshair=True)
-    cv2.destroyWindow("Select Reference Object")  # ROI 선택 후 창 닫기
+    # 이미지 전처리
+    processed_image = preprocess_image(original_image.copy())
 
-    # 3. 기준 물체 영역에서 스케일 계산
-    x, y, w, h = map(int, roi)
-    reference_object = image[y:y + h, x:x + w]  # 기준 물체의 ROI 이미지
-    ref_width = w  # 기준 물체 너비 (픽셀)
-    actual_width = float(input("기준 물체의 실제 너비(cm)를 입력하세요: "))  # 실제 너비 입력
+    # 기준 물체 선택
+    reference_object = select_reference_object(processed_image)
 
-    scale = actual_width / ref_width  # 스케일 계산
+    # 실제 너비 입력 받기
+    real_width = float(input("선택한 기준 물체의 실제 너비(cm)를 입력하세요: "))
 
-    #update commit here!!
-    # 4. 다중 스케일 객체 탐지
+    # 픽셀당 실제 거리 계산
+    pixels_per_cm = reference_object[2] / real_width
+
+    # YOLO 모델 로드
+    model = YOLO('yolov8n.pt')
+
+    # 객체 탐지
+    results = model(processed_image)
+
+    # 측정 결과 저장
+    measurements = []
+    output_image = original_image.copy()
+
+    # 결과 시각화 및 측정값 계산
+    for r in results:
+        boxes = r.boxes
+        for box in boxes:
+            x1, y1, x2, y2 = box.xyxy[0]
+            class_id = int(box.cls)
+            conf = float(box.conf)
+            
+            if conf < confidence_threshold:
+                continue
+
+            # 기준 물체와 동일한 객체는 제외
+            if (x1, y1, x2-x1, y2-y1) == reference_object:
+                continue
+
+            # 실제 크기 계산 (cm)
+            width_cm = (x2 - x1) / pixels_per_cm
+            height_cm = (y2 - y1) / pixels_per_cm
+
+            # 클래스 이름 가져오기
+            class_name = model.names[class_id]
+
+            # 측정값 저장
+            measurements.append([class_name, width_cm, height_cm])
+
+            # 바운딩 박스 그리기
+            cv2.rectangle(output_image, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+            cv2.putText(output_image, f"{class_name}: {width_cm:.2f}x{height_cm:.2f}cm", 
+                        (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    return output_image, measurements
+
+def preprocess_image(image):
+    # 가우시안 블러로 노이즈 제거
+    blurred = cv2.GaussianBlur(image, (5, 5), 0)
+    
+    # 이미지 정규화
+    normalized = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX)
+    
+    # 대비 향상
+    lab = cv2.cvtColor(normalized, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    enhanced = cv2.merge((cl,a,b))
+    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+    
+    return enhanced
+
+def select_reference_object(image):
+    # 기준 물체 선택을 위한 ROI
+    roi = cv2.selectROI("Select a reference object", image, False)
+    cv2.destroyWindow("Select a reference object")
+    return roi
+
+def detect_objects(image):
+    # 객체 탐지를 위한 기본 설정
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    measurements = []
+    edges = cv2.Canny(gray, 50, 150)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # 이미지 피라미드 생성
-    scales = [1.0, 0.75, 0.5]
-    for scale_factor in scales:
-        resized = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor)
-        
-        _, thresh = cv2.threshold(resized, 100, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            
-            # 원본 이미지 크기로 좌표 변환
-            x, y = int(x / scale_factor), int(y / scale_factor)
-            w, h = int(w / scale_factor), int(h / scale_factor)
-            
-            width_cm = w * scale
-            height_cm = h * scale
-            
-            # 너무 작은 객체 무시
-            if width_cm > 1 and height_cm > 1:
-                measurements.append((width_cm, height_cm))
-                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-    #finish my commit!!
-
-    # 5. 객체 크기 측정 및 시각화
-    measurements = []
+    detections = []
     for contour in contours:
+        # 면적이 너무 작은 컨투어 무시
+        if cv2.contourArea(contour) < 100:
+            continue
+            
         x, y, w, h = cv2.boundingRect(contour)
-        width_cm = w * scale
-        height_cm = h * scale
-        measurements.append((width_cm, height_cm))
-        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-    # 6. Matplotlib으로 결과 시각화
-    plt.figure(figsize=(10, 6))
-    plt.imshow(image_rgb)
-    plt.title("Object Size Measurement")
-    plt.axis("off")
-    plt.show()
-
+        confidence = calculate_confidence(contour)  # 컨투어 기반 신뢰도 계산
+        
+        detections.append({
+            'bbox': (x, y, w, h),
+            'confidence': confidence
+        })
     
-    return image, measurements
+    return detections
+
+def calculate_confidence(contour):
+    # 컨투어의 면적과 둘레를 기반으로 신뢰도 계산
+    area = cv2.contourArea(contour)
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter == 0:
+        return 0
+    circularity = 4 * np.pi * area / (perimeter * perimeter)
+    return min(1.0, circularity)
+
+def filter_detections(detections, confidence_threshold):
+    return [det for det in detections if det['confidence'] > confidence_threshold]
+
+def apply_nms(detections, nms_threshold):
+    if not detections:
+        return []
+        
+    boxes = [det['bbox'] for det in detections]
+    scores = [det['confidence'] for det in detections]
+    
+    return cv2.dnn.NMSBoxes(
+        boxes,
+        scores,
+        0.0,  # score_threshold
+        nms_threshold
+    ).flatten()
